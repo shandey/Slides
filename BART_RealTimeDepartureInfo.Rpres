@@ -1,0 +1,134 @@
+BART Real-time Departure Info
+========================================================
+author: Shan Dey
+date: 9/25/2015
+
+Background
+========================================================
+
+Bay Area Rapid Transport (BART) is a train system running n bay area. The app is geared towards providiing real-time departure information for any station.
+
+Use case:
+- Before someone reachess the station, someone can get into the app to see after what time he can expect a train to depart from his selected station.
+
+Now, let's check what is available..
+========================================================
+
+BART has a developer program available at: http://www.bart.gov/schedules/developers
+
+The Real BART API:
+A one-stop shop for your next killer app: Real time arrivals, schedules, trip plans, delay advisories, station area information and more. 
+
+But, some of the information are defragmented and not the way the apps wants it. So, we need do some pre-work...
+
+Code - Some pre-works (global.R)
+========================================================
+First I prepared some base code for the following (in global.R):
+
+- getBARTRoutesDF: returns a data frame for all the Routes that BART operates in
+- getBARTStationsDF: returns a data frame for all the Stations that BART operates in
+- getBARTStationsForRouteDF: returns a data frame with the real time departure for station (station code is the input).
+
+The getBARTStationsForRouteDF decomposes the xml doc from the BART API call into a denormalized data frame structure combining destination and departure information.
+
+The final app: https://shandey.shinyapps.io/shiny
+
+ui.R
+========================================================
+UI 
+```{r echo=FALSE}
+## global.R
+library(xml2)
+library(plyr)
+library(RCurl)
+library(devtools)
+library(XML)
+
+getBARTRoutesDF <- function() {
+  # Returns a data.frame for BART routes
+  getRoutesXML <- getURL('http://api.bart.gov/api/route.aspx?cmd=routes&key=MW9S-E7SL-26DU-VV8V')
+  routesData <- xmlParse(getRoutesXML)
+  xmlToDataFrame(nodes = getNodeSet(routesData, "//root/routes/route"))
+}
+
+getBARTStationsDF <- function() {
+  # Returns a data.frame for BART stations
+  getStationsXML <- getURL('http://api.bart.gov/api/stn.aspx?cmd=stns&key=MW9S-E7SL-26DU-VV8V')
+  stationsData <- xmlParse(getStationsXML)
+  xmlToDataFrame(nodes = getNodeSet(stationsData, "//root/stations/station"))
+}
+
+getBARTStationsForRouteDF <- function(iRoute) {
+  # Returns a data.frame for BART stations for a route
+  url <- paste('http://api.bart.gov/api/route.aspx?cmd=routeinfo&key=MW9S-E7SL-26DU-VV8V&route=',as.character(iRoute),sep="")
+  getStationsXML <- getURL(url)
+  stationsData <- xmlParse(getStationsXML)
+  df <- xmlToDataFrame(nodes = getNodeSet(stationsData, "//root/routes/route/config/station"))
+  names(df) <- c("abbr")
+  merge(df, getBARTStationsDF(), by="abbr")
+}
+
+getBARTStationsETDDF <- function(iStation) {
+  # Returns a data.frame for BART stations for a route
+  url <- paste('http://api.bart.gov/api/etd.aspx?cmd=etd&key=MW9S-E7SL-26DU-VV8V&orig=',iStation,sep="")
+  
+  # Reste dfETD data frame
+  print(url)
+  getStationsXML <- getURL(url)
+  stationsData <- xmlParse(getStationsXML)
+  # Get ETD data per destination
+  etaNodeSet <- getNodeSet(stationsData, "//root/station/etd")
+  
+  # Now get all the ETDs fro a particular destination
+  for (i in 1:length(etaNodeSet)) {
+    destination <- xmlValue(etaNodeSet[[i]][[1]])
+    dfD <- data.frame(destination = destination)
+    getNodeSet(etaNodeSet[[i]], "//root/station/etd/estimate")
+    df <- xmlToDataFrame(nodes = getNodeSet(etaNodeSet[[i]], "//root/station/etd/estimate"))
+    if ( i > 1) {
+      dfETD <- rbind2(dfETD, merge.data.frame(dfD, df, all = TRUE) )
+    } else {
+      dfETD <- merge.data.frame(dfD, df, all = TRUE)
+    }
+  }
+  print(dfETD)
+  dfETD
+}
+
+## 
+library(shiny)
+
+# Get the route choices
+routeChoicesDF <- data.frame(name=getBARTRoutesDF()$name, value=getBARTRoutesDF()$number)
+routeChoices <- as.list(routeChoicesDF$value)
+names(routeChoices) <- routeChoicesDF$name
+
+# Define UI
+shinyUI(pageWithSidebar(
+  
+  # Application title
+  headerPanel("BART: Real-time Departure Informaton"),
+  
+  # Sidebar with a input for stations
+  sidebarPanel(
+    h6("BART (Bay Area Rapid Transit) is the train system in Bay area that connects different parts of the bay.")
+    , h6("Please select the route, followed by station to get real-time departure information of the selected statiom.")
+    , selectInput(inputId="iRoute", "Select a Route:",choices = routeChoices, selectize = FALSE)
+    , selectInput("iStation", "Select a Station:","FRMT",selectize = FALSE)
+  ),
+  
+  # Show the main panel with the real-time departure information.
+  mainPanel(
+    textOutput("addressText"),
+    tableOutput("outputDataTable")
+  )
+))
+```
+
+server.R
+========================================================
+- The server codes listnes to the Route and Statin selected in the UI. 
+- Then it calls the BART APIs to the get the real-time information
+- and displays the data frame in the data table
+
+That's it! I hope I can get this more sophsticated in the project!!!
